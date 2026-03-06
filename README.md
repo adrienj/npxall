@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![CI](https://github.com/adrienj/anyx/actions/workflows/deploy-web.yml/badge.svg)](https://github.com/adrienj/anyx/actions)
+[![CI](https://github.com/adrienj/anyx/actions/workflows/ci.yml/badge.svg)](https://github.com/adrienj/anyx/actions/workflows/ci.yml)
 [![Web UI](https://img.shields.io/badge/web-adrienj.github.io%2Fanyx-blue)](https://adrienj.github.io/anyx/)
 
 **Run any npm function directly from the command line — without writing a script.**
