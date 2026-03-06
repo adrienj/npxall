@@ -2,8 +2,8 @@ name: Deploy anyx-web
 
 on:
   push:
-    branches: [main]
-    paths: ['web/**']
+    branches: [gh-pages]
+
   workflow_dispatch:
 
 permissions:
