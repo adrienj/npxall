@@ -54,5 +54,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "secure-exec": "^0.1.0"
   }
 }

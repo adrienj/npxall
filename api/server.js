@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
-import { spawnSandboxed, isBwrapAvailable } from '../shared/sandbox.js';
+import { execSandboxed } from '../shared/secure-exec-sandbox.js';
 import { splitArgs, parseValue, validatePackageName } from '../shared/parse.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -90,7 +90,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     cache: { usedMb: cache.totalCachedMb(), maxMb: MAX_CACHE_MB, packages: cache.registry.size },
-    sandboxed: isBwrapAvailable(),
+    sandboxed: true,
+    sandboxEngine: 'secure-exec',
   });
 });
 
@@ -129,7 +130,7 @@ app.all('*', async (req, res) => {
 
       // Bare function with POST body
       if (steps.length === 0 && bodyArgs?.length > 0) {
-        const result = await spawnSandboxed({
+        const result = await execSandboxed({
           cacheDir: cache.pkgCacheDir(pkgName),
           packageName: pkgName,
           args: bodyArgs,
@@ -143,7 +144,7 @@ app.all('*', async (req, res) => {
       }
 
       const prepared = prepareSteps(steps, bodyArgs);
-      const result = await spawnSandboxed({
+      const result = await execSandboxed({
         cacheDir: cache.pkgCacheDir(pkgName),
         packageName: pkgName,
         steps: prepared,
