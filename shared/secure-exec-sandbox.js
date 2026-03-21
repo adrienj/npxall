@@ -69,9 +69,16 @@ function buildCode(packageName, method, args, steps, isEsm) {
   // Await helper: resolves promises, passes through non-thenables unchanged.
   const awaitHelper = `async function _await(v) { return (v && typeof v.then === 'function') ? await v : v; }\n`;
 
+  // The crypto-browserify polyfill bundled in secure-exec's bridge has two code paths
+  // in actualFill(): when process.browser is truthy it uses crypto.getRandomValues()
+  // (which the bridge provides natively via _cryptoRandomFill), and when falsy it uses
+  // randombytes() + Buffer.copy(Uint8Array) which breaks in the isolate's Buffer bridge.
+  // Setting this flag steers the polyfill to the working Web Crypto path.
+  const cryptoFix = `if (typeof process !== 'undefined') process.browser = true;\n`;
+
   if (steps && Array.isArray(steps)) {
     // Pipeline mode (API): chain multiple method calls
-    let code = importLine + awaitHelper + `var _acc;\n`;
+    let code = cryptoFix + importLine + awaitHelper + `var _acc;\n`;
 
     for (let i = 0; i < steps.length; i++) {
       const { method: m, args: a = [] } = steps[i];
@@ -103,7 +110,7 @@ function buildCode(packageName, method, args, steps, isEsm) {
   }
 
   // Single method mode (MCP)
-  let code = importLine + awaitHelper;
+  let code = cryptoFix + importLine + awaitHelper;
   const a = JSON.stringify(args || []);
 
   if (method) {
