@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
-import { execSandboxed } from '../shared/secure-exec-sandbox.js';
+import { execSandboxed, isSecureExecAvailable } from '../shared/secure-exec-sandbox.js';
 import { splitArgs, parseValue, validatePackageName } from '../shared/parse.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     cache: { usedMb: cache.totalCachedMb(), maxMb: MAX_CACHE_MB, packages: cache.registry.size },
-    sandboxed: true,
+    sandboxed: isSecureExecAvailable(),
     sandboxEngine: 'secure-exec',
   });
 });
