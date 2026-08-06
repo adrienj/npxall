@@ -156,6 +156,7 @@ app.all('*', async (req, res) => {
     }
   } catch (error) {
     const status = error.status || 400;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
     res.status(status).json({ error: error.message });
   }
 });

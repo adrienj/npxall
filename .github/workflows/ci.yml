@@ -29,7 +29,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # shared/ now depends on secure-exec -> isolated-vm, which declares
+          # engines node >=22 and ships no Node 20 prebuild.
+          node-version: 22
           cache: npm
           cache-dependency-path: shared/package-lock.json
       - run: npm ci
@@ -48,8 +50,24 @@ jobs:
           cache-dependency-path: api/package-lock.json
       - run: npm ci
         working-directory: api
+      - run: npm ci
+        working-directory: shared
       - run: npm test
         working-directory: api
+      # Vitest resolves bare specifiers from the Vite root, so it CANNOT catch a
+      # dependency that is unresolvable under real Node resolution. That is exactly
+      # how this branch shipped a server that imported 'secure-exec' from shared/
+      # while the package was installed only in api/node_modules. Boot it for real
+      # and assert the sandbox actually came up.
+      - name: Boot smoke test (real Node module resolution)
+        working-directory: api
+        env:
+          NPXALL_CACHE_DIR: /tmp/npxall-ci-cache
+        run: |
+          node server.js &
+          for i in $(seq 1 20); do curl -sf localhost:3000/health >/tmp/h.json && break; sleep 1; done
+          cat /tmp/h.json
+          grep -q '"sandboxed":true' /tmp/h.json
 
   mcp-tests:
     runs-on: ubuntu-latest
@@ -62,5 +80,39 @@ jobs:
           cache-dependency-path: mcp/package-lock.json
       - run: npm ci
         working-directory: mcp
+      - run: npm ci
+        working-directory: shared
       - run: npm test
         working-directory: mcp
+      # See api-tests: vitest's resolver hides real Node resolution failures.
+      - name: Boot smoke test (real Node module resolution)
+        working-directory: mcp
+        env:
+          NPXALL_CACHE_DIR: /tmp/npxall-ci-cache
+        run: |
+          node server.js &
+          for i in $(seq 1 20); do curl -sf localhost:3001/health >/tmp/h.json && break; sleep 1; done
+          cat /tmp/h.json
+          grep -q '"sandboxed":true' /tmp/h.json
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No job built the images, so a Dockerfile that could not install its native
+      # dependency (isolated-vm needs Node >=22 and a build toolchain on musl) went
+      # unnoticed while every test job stayed green.
+      - name: Build API image
+        run: docker build -f api/Dockerfile -t npxall-api:ci .
+      - name: Build MCP image
+        run: docker build -f mcp/Dockerfile -t npxall-mcp:ci .
+      - name: Boot API image and assert the sandbox is live
+        run: |
+          docker run -d --name api-ci -p 3000:3000 npxall-api:ci
+          for i in $(seq 1 30); do
+            if curl -sf localhost:3000/health > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/health.json
+          grep -q '"sandboxed":true' /tmp/health.json
+          test "$(curl -s localhost:3000/ms/60000)" = '"1m"'

@@ -6,6 +6,9 @@
   "scripts": {
     "test": "vitest run"
   },
+  "dependencies": {
+    "secure-exec": "^0.1.0"
+  },
   "devDependencies": {
     "vitest": "^4.1.0"
   }

@@ -1,70 +1,97 @@
 import { NodeRuntime, createNodeDriver, createNodeRuntimeDriverFactory } from 'secure-exec';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 
 /** Exit code used by secure-exec when CPU time limit is exceeded (matches GNU timeout convention). */
 const TIMEOUT_EXIT_CODE = 124;
 
-/** Maximum number of concurrent V8 isolate runtimes. */
-const MAX_CONCURRENT_RUNTIMES = 16;
-let _activeRuntimes = 0;
-
-/** Cache for ESM detection results (keyed by cacheDir + packageName). */
-const _esmCache = new Map();
+/** Per-isolate V8 heap limit, MB. */
+const MEMORY_LIMIT_MB = parseInt(process.env.SANDBOX_MEMORY_LIMIT_MB || '64', 10);
 
 /**
- * Check if an installed npm package is ESM-only by reading its package.json.
- * Returns true if the package has `"type": "module"`.
- * Results are memoized to avoid blocking readFileSync on every request.
+ * Maximum number of concurrent V8 isolate runtimes.
  *
- * @param {string} cacheDir - per-package cache directory
- * @param {string} packageName - npm package name
- * @returns {boolean}
+ * This must be sized against the container's memory limit, not picked freely:
+ * every live isolate can hold up to MEMORY_LIMIT_MB of heap, and isolated-vm
+ * documents that limit as a guideline rather than a hard ceiling ("a determined
+ * attacker could use 2-3 times this limit"). The previous value of 16 against a
+ * 1 GB container reserved 16 x 64 MB = 1024 MB of isolate heap alone, leaving
+ * nothing for the Node host — an OOM-kill of the whole process, not a clean 503.
+ *
+ * The default of 4 also matches the deployed `cpus: '1.0'`: isolate execution is
+ * CPU-bound, so higher concurrency multiplies p99 latency without adding
+ * throughput. Override via SANDBOX_MAX_CONCURRENCY when the deploy grows.
  */
-function isEsmPackage(cacheDir, packageName) {
-  const key = `${cacheDir}\0${packageName}`;
-  if (_esmCache.has(key)) return _esmCache.get(key);
+const MAX_CONCURRENT_RUNTIMES = parseInt(process.env.SANDBOX_MAX_CONCURRENCY || '4', 10);
+let _activeRuntimes = 0;
 
-  const parts = packageName.startsWith('@') ? packageName.split('/').slice(0, 2) : [packageName];
-  let result = false;
-  try {
-    const pkg = JSON.parse(readFileSync(join(cacheDir, 'node_modules', ...parts, 'package.json'), 'utf8'));
-    result = pkg.type === 'module';
-  } catch {
-    // default to CJS
+/**
+ * Method names that must never be dispatched.
+ *
+ * Method segments are used as computed property lookups (`_mod[name]`) inside the
+ * isolate, so `constructor` resolves to `Function` on any function export. Chained
+ * with a second step it becomes a code-generation gadget:
+ *
+ *   GET /lodash/constructor/"return 40+2"/call/   →   42
+ *
+ * The isolate still denies fs, network and child_process, so this is not an escape,
+ * but it does defeat the "only the package's own exported API is reachable"
+ * property that the URL grammar implies. The prototype-walking names are blocked
+ * for the same reason.
+ */
+const FORBIDDEN_METHODS = new Set([
+  'constructor', '__proto__', 'prototype',
+  'apply', 'call', 'bind',
+  '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__',
+]);
+
+/**
+ * Reject method names that are unsafe to dispatch.
+ *
+ * Deliberately a denylist and NOT an identifier allowlist. The first URL segment
+ * after the package name is overloaded: for a bare-function call like `/ms/60000`
+ * or `/@sindresorhus/slugify/Hello World`, that segment is the ARGUMENT, not a
+ * method name, and buildCode falls back to calling the module itself with it.
+ * Requiring an identifier there breaks every bare-function call.
+ *
+ * Arbitrary characters are safe because names are JSON.stringify'd into the
+ * generated source, so they cannot escape the string literal. The only real hazard
+ * is a name that resolves to a dangerous property, which is what FORBIDDEN_METHODS
+ * covers.
+ *
+ * @param {unknown} name
+ * @throws {Error} with .status 400 when the name is not dispatchable
+ */
+export function validateMethodName(name) {
+  if (typeof name !== 'string' || FORBIDDEN_METHODS.has(name)) {
+    const err = new Error(`Invalid method name: ${JSON.stringify(name)}`);
+    err.status = 400;
+    throw err;
   }
-  _esmCache.set(key, result);
-  return result;
 }
 
 /**
  * Build the JavaScript code to execute inside the V8 isolate.
  * Handles both pipeline mode (API: steps array) and single-call mode (MCP: method + args).
  *
- * - CJS packages: uses `require()` with `module.exports` (synchronous, no wrapping)
- * - ESM packages: uses static `import * as` with `export default` (.mjs mode);
- *   result is wrapped as `{ default: value }` by the isolate runtime.
+ * Everything runs as ESM (.mjs) regardless of whether the target package is ESM or
+ * CommonJS. The isolate's module loader provides CJS interop, so `import * as` works
+ * for both, and ESM is the only module type that permits the top-level `await` this
+ * generated code needs in order to support packages that return promises.
  *
- * All return values are awaited to handle async packages correctly.
+ * The result is wrapped as `{ default: value }` by the isolate runtime; see
+ * unwrapDefault() for the matching unwrap.
  *
  * @param {string} packageName
  * @param {string|undefined} method
  * @param {unknown[]|undefined} args
  * @param {Array<{method: string, args: unknown[]}>|undefined} steps
- * @param {boolean} isEsm - whether the package is ESM-only
  * @returns {string} JavaScript source code
  */
-function buildCode(packageName, method, args, steps, isEsm) {
+export function buildCode(packageName, method, args, steps) {
   const pkg = JSON.stringify(packageName);
 
-  // Import statement: static import for ESM (supports top-level await),
-  // require() for CJS (synchronous, no wrapping overhead).
-  const importLine = isEsm
-    ? `import * as _m from ${pkg};\nvar _mod = _m.default !== undefined ? _m.default : _m;\n`
-    : `var _pkg = require(${pkg});\nvar _mod = _pkg && _pkg.default !== undefined ? _pkg.default : _pkg;\n`;
+  const importLine = `import * as _m from ${pkg};\nvar _mod = _m.default !== undefined ? _m.default : _m;\n`;
 
-  // How to export the final value: ESM uses `export default`, CJS uses `module.exports`.
-  const exportResult = (expr) => isEsm ? `export default ${expr};\n` : `module.exports = ${expr};\n`;
+  const exportResult = (expr) => `export default ${expr};\n`;
 
   // Await helper: resolves promises, passes through non-thenables unchanged.
   const awaitHelper = `async function _await(v) { return (v && typeof v.then === 'function') ? await v : v; }\n`;
@@ -82,6 +109,7 @@ function buildCode(packageName, method, args, steps, isEsm) {
 
     for (let i = 0; i < steps.length; i++) {
       const { method: m, args: a = [] } = steps[i];
+      validateMethodName(m);
       const mStr = JSON.stringify(m);
       const aStr = JSON.stringify(a);
 
@@ -114,6 +142,7 @@ function buildCode(packageName, method, args, steps, isEsm) {
   const a = JSON.stringify(args || []);
 
   if (method) {
+    validateMethodName(method);
     const mStr = JSON.stringify(method);
     code += `if (typeof _mod[${mStr}] !== 'function') {\n` +
       `  var _available = Object.keys(_mod).filter(function(k) { return typeof _mod[k] === 'function'; }).slice(0, 10);\n` +
@@ -132,6 +161,22 @@ function buildCode(packageName, method, args, steps, isEsm) {
   }
 
   return code;
+}
+
+/**
+ * Unwrap the isolate's module exports.
+ *
+ * `export default value` comes back as `{ default: value }`. Testing for the key
+ * rather than for a non-nullish value matters: a package that legitimately returns
+ * `null` (e.g. lodash.noop) would otherwise fall through and leak the raw
+ * `{ default: null }` wrapper to the caller.
+ *
+ * @param {unknown} exports - the isolate's module exports
+ * @returns {unknown} the unwrapped value
+ */
+export function unwrapDefault(exports) {
+  if (exports && typeof exports === 'object' && 'default' in exports) return exports.default;
+  return exports;
 }
 
 /**
@@ -188,10 +233,13 @@ export function isSecureExecAvailable() {
  */
 export async function execSandboxed({ cacheDir, packageName, method, args, steps, timeoutMs = 5000 }) {
   if (_activeRuntimes >= MAX_CONCURRENT_RUNTIMES) {
-    throw new Error('Too many concurrent sandbox executions, try again later');
+    // 503, not 400: this is server saturation, and clients (and CDNs) treat 4xx as
+    // permanent and will not back off and retry.
+    const err = new Error('Too many concurrent sandbox executions, try again later');
+    err.status = 503;
+    err.retryAfter = 1;
+    throw err;
   }
-
-  const esm = isEsmPackage(cacheDir, packageName);
 
   const runtime = new NodeRuntime({
     systemDriver: createNodeDriver({
@@ -209,16 +257,19 @@ export async function execSandboxed({ cacheDir, packageName, method, args, steps
       },
     }),
     runtimeDriverFactory: createNodeRuntimeDriverFactory(),
-    memoryLimit: 64, // MB - V8 isolate heap limit
+    memoryLimit: MEMORY_LIMIT_MB, // V8 isolate heap limit
     cpuTimeLimitMs: timeoutMs,
+    // Without these the bridge will marshal an arbitrarily large return value back
+    // to the host, where express then JSON.stringifies it. A package returning a
+    // ~60 MB structure stays inside the heap limit but blows the container budget.
+    resourceBudgets: { maxOutputBytes: 1_000_000, maxBridgeCalls: 10_000 },
   });
 
   _activeRuntimes++;
   try {
-    const code = buildCode(packageName, method, args, steps, esm);
-    // ESM packages need a .mjs extension so the isolate uses ESM module mode
-    const filePath = esm ? '/root/index.mjs' : '/root/index.js';
-    const result = await runtime.run(code, filePath);
+    const code = buildCode(packageName, method, args, steps);
+    // .mjs so the isolate uses ESM module mode (required for top-level await)
+    const result = await runtime.run(code, '/root/index.mjs');
 
     if (result.code !== 0) {
       if (result.code === TIMEOUT_EXIT_CODE) {
@@ -228,12 +279,18 @@ export async function execSandboxed({ cacheDir, packageName, method, args, steps
       throw new Error(`Sandbox execution failed: ${detail}`);
     }
 
-    // ESM `export default value` wraps the result as `{ default: value }`
-    return esm ? result.exports?.default ?? result.exports : result.exports;
+    return unwrapDefault(result.exports);
   } finally {
-    _activeRuntimes--;
-    runtime.terminate().catch((err) => {
+    // Await termination BEFORE freeing the slot. terminate() disposes the V8 isolate;
+    // decrementing first would admit a new request while the outgoing isolate still
+    // holds its heap, so the real isolate count could exceed MAX_CONCURRENT_RUNTIMES
+    // without bound under load — defeating the memory budget the cap exists to enforce.
+    try {
+      await runtime.terminate();
+    } catch (err) {
       console.warn(`[sandbox] runtime.terminate() failed: ${err.message}`);
-    });
+    } finally {
+      _activeRuntimes--;
+    }
   }
 }
