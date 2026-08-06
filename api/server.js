@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
 import { execSandboxed, isSecureExecAvailable } from '../shared/secure-exec-sandbox.js';
 import { splitArgs, parseValue, validatePackageName } from '../shared/parse.js';
+import { requestLogger } from '../shared/request-log.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,9 @@ function prepareSteps(steps, bodyArgs) {
 // ─── Express app ─────────────────────────────────────────────────────────────
 
 const app = express();
+
+// First, so that even requests rejected by body parsing get logged.
+app.use(requestLogger('api'));
 
 app.use((req, res, next) => {
   if (!req.headers['content-type']) req.headers['content-type'] = 'application/json';

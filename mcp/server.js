@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
 import { execSandboxed, isSecureExecAvailable } from '../shared/secure-exec-sandbox.js';
 import { validatePackageName } from '../shared/parse.js';
+import { requestLogger } from '../shared/request-log.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +85,8 @@ function createMcpServer() {
 // ─── Express app ─────────────────────────────────────────────────────────────
 
 const app = express();
+// First, so that even requests rejected by body parsing get logged.
+app.use(requestLogger('mcp'));
 app.use(express.json());
 
 // ── Modern: Streamable HTTP transport (MCP spec 2025-03-26) ──────────────────
