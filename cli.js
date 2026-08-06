@@ -439,8 +439,8 @@ Shell setup (enables bare [ ] brackets):
   npxall --setup
 
 REST API:
-  https://api.npxall.com/<package>/<method>?key=value
-  POST https://api.npxall.com/<package>/<method>  (JSON body as args)
+  https://api.npxall.com/<package>/<method>/<args>/<method>/<args>
+  POST https://api.npxall.com/<package>/<method>  (JSON array body as args)
 
 Docs: https://npxall.com
 `);

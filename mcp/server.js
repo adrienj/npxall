@@ -5,8 +5,9 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
-import { spawnSandboxed, isBwrapAvailable } from '../shared/sandbox.js';
+import { execSandboxed, isSecureExecAvailable } from '../shared/secure-exec-sandbox.js';
 import { validatePackageName } from '../shared/parse.js';
+import { requestLogger } from '../shared/request-log.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ function createMcpServer() {
         await cache.installWithCacheCheck(pkgName);
         cache.acquire(pkgName);
         try {
-          const result = await spawnSandboxed({
+          const result = await execSandboxed({
             cacheDir: cache.pkgCacheDir(pkgName),
             packageName: pkgName,
             method,
@@ -84,6 +85,8 @@ function createMcpServer() {
 // ─── Express app ─────────────────────────────────────────────────────────────
 
 const app = express();
+// First, so that even requests rejected by body parsing get logged.
+app.use(requestLogger('mcp'));
 app.use(express.json());
 
 // ── Modern: Streamable HTTP transport (MCP spec 2025-03-26) ──────────────────
@@ -135,7 +138,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     cache: { usedMb: cache.totalCachedMb(), maxMb: MAX_CACHE_MB, packages: cache.registry.size },
-    sandboxed: isBwrapAvailable(),
+    sandboxed: isSecureExecAvailable(),
+    sandboxEngine: 'secure-exec',
   });
 });
 

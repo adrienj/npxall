@@ -8,12 +8,13 @@ services:
     environment:
       - PORT=3000
     restart: unless-stopped
-    cap_add:
-      - SYS_ADMIN
-      - NET_ADMIN
+    # No cap_add / no unconfined seccomp: those existed only so bubblewrap could
+    # create namespaces. Execution now happens in V8 isolates inside the process,
+    # so the container needs no elevated privilege — and since this service runs
+    # attacker-supplied code, the default seccomp/AppArmor profiles are the outer
+    # boundary that must stay ON.
     security_opt:
-      - seccomp:unconfined
-      - apparmor:unconfined
+      - no-new-privileges:true
     deploy:
       resources:
         limits:
@@ -29,12 +30,9 @@ services:
     environment:
       - PORT=3001
     restart: unless-stopped
-    cap_add:
-      - SYS_ADMIN
-      - NET_ADMIN
+    # See the api service: the bubblewrap-era privileges are no longer needed.
     security_opt:
-      - seccomp:unconfined
-      - apparmor:unconfined
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

@@ -13,20 +13,28 @@ npxall lets anyone call any npm package function from the CLI, REST API, or AI a
 
 ### Shipped
 - [x] CLI with method chaining, sub-expressions, stdin piping — v0.2.0 on npm
-- [x] REST API with URL pipeline chaining — `api.npxall.com` (live)
-- [x] MCP server with single `call` tool — `mcp.npxall.com` (live)
+- [x] REST API with URL pipeline chaining, `api.npxall.com` (see Status below)
+- [x] MCP server with single `call` tool, `mcp.npxall.com` (see Status below)
 - [x] Homepage at `npxall.com` with favicon, terminal demo (CLI + API curl examples), API and MCP docs
-- [x] CI: 8-job matrix (Linux/macOS/Windows x Node 20/22 + API + MCP) — all green
+- [x] CI: Linux/macOS/Windows x Node 20/22, plus shared, API, MCP and a Docker build job
 - [x] npm v0.2.0 published (2026-03-13)
 - [x] Coolify deploy from public `adrienj/npxall` repo (private repo eliminated)
 - [x] Custom domain: npxall.com, api.npxall.com, mcp.npxall.com, status.npxall.com
 - [x] Execution timeouts (5s) and install timeouts (60s) on API/MCP
 - [x] Docker non-root containers with resource limits
-- [x] Sandboxed execution via bubblewrap (network isolation, read-only fs, PID namespace, per-package cache isolation, env sanitization, --ignore-scripts) — 2026-03-14
-- [x] Shared module extraction (parse, loader, cache, sandbox) — DRY refactor of api/mcp servers — 2026-03-14
+- [x] Sandboxed execution via bubblewrap, 2026-03-14 (replaced by V8 isolates, see below)
+- [x] Shared module extraction (parse, cache, sandbox), DRY refactor of api/mcp servers, 2026-03-14
+- [x] Sandboxed execution via secure-exec V8 isolates, replacing bubblewrap and its `CAP_SYS_ADMIN` requirement, 2026-08-06
+
+## Status
+
+`npxall.com` (GitHub Pages) is up. **`api.npxall.com` and `mcp.npxall.com` have been
+down since 2026-06-12**; the Coolify service sits at `exited:unhealthy`. Anything in
+this document describing the hosted API or MCP as reachable refers to intended state,
+not current state, until that deploy is restored.
 
 ### In Progress
-(none)
+- Restoring the api/mcp deploy on the V8-isolate sandbox
 
 ### Planned (Next)
 - [ ] Add npxall MCP server to public MCP registries (Smithery, MCP Hub) — S, high discovery value

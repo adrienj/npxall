@@ -1,8 +1,9 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { createCacheManager } from '../shared/cache.js';
-import { spawnSandboxed, isBwrapAvailable } from '../shared/sandbox.js';
+import { execSandboxed, isSecureExecAvailable } from '../shared/secure-exec-sandbox.js';
 import { splitArgs, parseValue, validatePackageName } from '../shared/parse.js';
+import { requestLogger } from '../shared/request-log.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -80,17 +81,30 @@ function prepareSteps(steps, bodyArgs) {
 
 const app = express();
 
+// First, so that even requests rejected by body parsing get logged.
+app.use(requestLogger('api'));
+
 app.use((req, res, next) => {
   if (!req.headers['content-type']) req.headers['content-type'] = 'application/json';
   next();
 });
 app.use(express.json());
 
+// express.json() throws on a malformed body before any route runs, so without this
+// the client gets Express's default HTML error page from an API that documents a
+// JSON error contract. The middleware above stamps a JSON content-type on every
+// unlabelled request, which widens the set of callers that can hit it.
+app.use((err, req, res, next) => {
+  if (err) return res.status(400).json({ error: `Invalid JSON body: ${err.message}` });
+  next();
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     cache: { usedMb: cache.totalCachedMb(), maxMb: MAX_CACHE_MB, packages: cache.registry.size },
-    sandboxed: isBwrapAvailable(),
+    sandboxed: isSecureExecAvailable(),
+    sandboxEngine: 'secure-exec',
   });
 });
 
@@ -129,7 +143,7 @@ app.all('*', async (req, res) => {
 
       // Bare function with POST body
       if (steps.length === 0 && bodyArgs?.length > 0) {
-        const result = await spawnSandboxed({
+        const result = await execSandboxed({
           cacheDir: cache.pkgCacheDir(pkgName),
           packageName: pkgName,
           args: bodyArgs,
@@ -143,7 +157,7 @@ app.all('*', async (req, res) => {
       }
 
       const prepared = prepareSteps(steps, bodyArgs);
-      const result = await spawnSandboxed({
+      const result = await execSandboxed({
         cacheDir: cache.pkgCacheDir(pkgName),
         packageName: pkgName,
         steps: prepared,
@@ -155,6 +169,7 @@ app.all('*', async (req, res) => {
     }
   } catch (error) {
     const status = error.status || 400;
+    if (error.retryAfter) res.set('Retry-After', String(error.retryAfter));
     res.status(status).json({ error: error.message });
   }
 });
