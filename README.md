@@ -222,17 +222,23 @@ curl https://api.npxall.com/lodash/camelCase/hello%20world/toUpperCase/
 
 ### Security
 
-API and MCP execution is sandboxed:
+API and MCP requests run inside a V8 isolate provided by [secure-exec](https://www.npmjs.com/package/secure-exec). The isolate denies everything by default; the table lists what a package gets back.
 
-| Protection | Mechanism |
-|-----------|-----------|
-| No postinstall scripts | `npm install --ignore-scripts` |
-| No network during execution | Linux network namespace isolation |
-| Read-only filesystem | bubblewrap `--ro-bind` |
-| Process isolation | PID namespace |
-| No cross-package access | Per-package cache directories |
-| No env var leaks | Sanitized environment |
-| Execution timeout | 5s (configurable via `EXEC_TIMEOUT_MS`) |
+| Protection | Mechanism | What a package sees |
+|-----------|-----------|---------------------|
+| No postinstall scripts | `npm install --ignore-scripts` | scripts never run |
+| No network | no network adapter is passed to the isolate | `fetch` and `http` fail with `ENOSYS` |
+| No filesystem | only the package's own cache dir is projected in | reading `/etc/passwd` gives `ENOENT` |
+| No subprocesses | no command executor is passed to the isolate | `child_process.spawn` fails with `ENOSYS` |
+| No env vars | the isolate gets an empty environment | `process.env` is `{}` |
+| No cross-package access | one cache directory per package | only its own `node_modules` |
+| Execution timeout | `EXEC_TIMEOUT_MS` | terminated at 5s |
+| Memory limit | `SANDBOX_MEMORY_LIMIT_MB` | 64 MB V8 heap |
+| Concurrency cap | `SANDBOX_MAX_CONCURRENCY` | 4 isolates at once, then HTTP 503 |
+
+Two limits worth knowing. A V8 isolate contains JavaScript but shares the host process, so the container is the outer boundary rather than a formality. And `isolated-vm` treats the memory limit as a guideline that determined code can exceed, which is why the concurrency cap is sized against the container's memory rather than picked for throughput.
+
+Packages with native bindings (`.node` files) do not run, and the isolate has no writable `/tmp`.
 
 ### Endpoints
 
@@ -279,16 +285,16 @@ Single `call` tool with parameters:
 
 ## How it works
 
-1. On first use, the package is installed into a cache dir (`~/.npxall/` for CLI, `/app/cache/` for API/MCP).
-2. The package is loaded via `require` or dynamic `import()` depending on its module format.
-3. Arguments are JSON-parsed where possible, falling back to strings.
-4. The result is printed to stdout (CLI) or returned as JSON (API/MCP).
-5. Packages are cached with LRU eviction (API/MCP) or indefinitely (CLI).
+1. On first use, npxall installs the package into a cache dir (`~/.npxall/` for the CLI, `/app/cache/` for API and MCP).
+2. The CLI loads the package in its own process with `require` or `import()`. The API and MCP servers instead generate a small ESM module and run it inside a V8 isolate, so the package never executes in the server process.
+3. npxall JSON-parses arguments where it can and falls back to strings.
+4. The CLI prints the result to stdout; the API and MCP servers return it as JSON.
+5. API and MCP evict cached packages LRU. The CLI caches them indefinitely.
 
 ### Timeouts
 
-- **Install**: 60s max (configurable via `INSTALL_TIMEOUT_MS`)
-- **Execution**: 20s max (configurable via `EXEC_TIMEOUT_MS`)
+- **Install**: 60s max (`INSTALL_TIMEOUT_MS`)
+- **Execution**: 5s max (`EXEC_TIMEOUT_MS`)
 
 ---
 
@@ -297,15 +303,14 @@ Single `call` tool with parameters:
 ```bash
 git clone https://github.com/adrienj/npxall.git
 cd npxall
-npm install
-npm test              # CLI tests (262 tests)
 
-cd api && npm install
-npm test              # API tests (49 tests)
-
-cd ../mcp && npm install
-npm test              # MCP tests (36 tests)
+npm install && npm test                 # CLI
+cd shared && npm install && npm test     # shared modules + sandbox
+cd ../api && npm install && npm test     # REST API
+cd ../mcp && npm install && npm test     # MCP server
 ```
+
+The api, mcp and shared suites need **Node 22**. They load `isolated-vm`, which ships prebuilds for Node 22 and 24 only; on Node 25 it compiles from source and segfaults when it constructs an isolate, so you get exit 139 instead of a test result. The CLI suite runs on any supported version.
 
 ---
 

@@ -86,6 +86,15 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
+// express.json() throws on a malformed body before any route runs, so without this
+// the client gets Express's default HTML error page from an API that documents a
+// JSON error contract. The middleware above stamps a JSON content-type on every
+// unlabelled request, which widens the set of callers that can hit it.
+app.use((err, req, res, next) => {
+  if (err) return res.status(400).json({ error: `Invalid JSON body: ${err.message}` });
+  next();
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',

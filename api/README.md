@@ -21,50 +21,65 @@ REST API and MCP server for calling any npm package function over HTTP.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/:package/:method?key=value` | Query params as args |
-| `POST` | `/:package/:method` | JSON body as args |
-| `GET` | `/health` | Cache stats + health check |
+| `GET` | `/:package/:method/:args/:method/:args/...` | Execute a pipeline |
+| `POST` | `/:package/:method` | JSON **array** body as args |
+| `GET` | `/health` | Cache stats + sandbox status |
 | `GET` | `/` | API info and examples |
 
 ### Examples
 
 ```bash
-# Simple call (GET)
+# Bare function
 curl https://api.npxall.com/ms/60000
-# → {"success":true,"result":"1m"}
+# → "1m"
 
-# With query params
-curl "https://api.npxall.com/lodash/camelCase?value=hello+world"
-# → {"success":true,"result":"helloWorld"}
+# Method with args
+curl "https://api.npxall.com/lodash/camelCase/hello%20world"
+# → "helloWorld"
 
-# POST with JSON body — multiple values spread as separate args
+# Chaining: concat, then reverse
+curl 'https://api.npxall.com/lodash/concat/%5B1,2%5D,3/reverse/'
+# → [3,2,1]
+
+# POST: the array IS the argument list, not one array argument
 curl -X POST https://api.npxall.com/lodash/chunk \
   -H "Content-Type: application/json" \
-  -d '{"array":[1,2,3,4],"size":2}'
-# → {"success":true,"result":[[1,2],[3,4]]}
-
-# Comma-separated arrays (GET)
-curl "https://api.npxall.com/lodash/uniq?values=1,2,3,2,1"
-# → {"success":true,"result":[1,2,3]}
+  -d '[[1,2,3,4],2]'
+# → [[1,2],[3,4]]
 ```
 
 ### Argument handling
 
-**GET (query params):** Each query key becomes a value. Single key → single arg. Multiple keys → object arg.
+Arguments come from **path segments**, or from a top-level JSON **array** body.
 
-**POST (JSON body):**
-- Array body → single array argument
-- Single-key object → the value becomes the argument
-- Multi-key object → values spread as separate arguments (order matters)
+- A JSON array body supplies the argument list for the **first step only**. `POST /ms` with `[60000]` calls `ms(60000)`.
+- Query strings are **discarded**. `?value=hello` does not become an argument; the call runs with no args and returns 200 with whatever that produces.
+- Object bodies are **ignored**. `{"array":[1,2],"size":2}` is not spread into arguments.
+- A method segment that is not a function on the package falls through to calling the package itself with that segment as a string, so a typo can return a value rather than an error. `GET /lodash/nosuchmethod/` returns a lodash wrapper object with HTTP 200.
+- Percent-encoded `/` inside an argument does not survive: the path is decoded before it is split, so `%2F` becomes a segment separator. URLs and file paths cannot be passed as arguments.
 
 ### Responses
 
+Success returns the value itself, with no envelope:
+
 ```json
-{ "success": true,  "result": <any JSON> }
-{ "success": false, "error": "message" }
+"1m"
+[[1,2],[3,4]]
 ```
 
-HTTP status `507 Insufficient Storage` when cache is full and all packages are in use.
+Errors return an object with a single `error` key:
+
+```json
+{ "error": "Invalid method name: \"constructor\"" }
+```
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Invalid package name, invalid method name, malformed JSON body, or no method given |
+| `503` | Too many concurrent executions; retry after the `Retry-After` header |
+| `507` | Cache is full and every package in it is in use |
+
+Because a successful result is returned bare, a package that returns `{"error": "..."}` is indistinguishable from a failure by body alone. Check the status code.
 
 ---
 
@@ -159,17 +174,13 @@ Both services use an LRU disk cache, wiped clean on every boot.
 ```json
 {
   "status": "ok",
-  "cache": {
-    "usedMb": 142,
-    "maxMb": 500,
-    "packages": 8,
-    "entries": {
-      "lodash": { "sizeMb": 6, "refCount": 0 },
-      "ms":     { "sizeMb": 1, "refCount": 1 }
-    }
-  }
+  "cache": { "usedMb": 142, "maxMb": 500, "packages": 8 },
+  "sandboxed": true,
+  "sandboxEngine": "secure-exec"
 }
 ```
+
+`sandboxed` reports whether the server can construct a V8 isolate. If it is `false`, every execution request fails; the server does not fall back to running packages unsandboxed.
 
 ---
 
