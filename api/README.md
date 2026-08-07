@@ -10,12 +10,13 @@ REST API and MCP server for calling any npm package function over HTTP.
 
 | Service | URL | Protocol |
 |---------|-----|----------|
-| REST API | https://npxall-api-3eia2da3ha-ew.a.run.app | HTTP/JSON |
-| MCP server | https://npxall-mcp-3eia2da3ha-ew.a.run.app | MCP (Streamable HTTP + SSE) |
+| REST API | https://api.npxall.com | HTTP/JSON |
+| MCP server | https://mcp.npxall.com | MCP (Streamable HTTP + SSE) |
 
-The `api.npxall.com` and `mcp.npxall.com` hostnames are not live. They are parked
-pending Google domain verification, so use the URLs above. Examples below still show
-the custom hostnames as the intended endpoints; substitute until the mapping lands.
+Both hostnames are mapped to Cloud Run. If TLS has not finished provisioning yet, the
+direct service URLs always work:
+`https://npxall-api-3eia2da3ha-ew.a.run.app` and
+`https://npxall-mcp-3eia2da3ha-ew.a.run.app`.
 
 ---
 

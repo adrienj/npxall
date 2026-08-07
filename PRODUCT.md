@@ -31,17 +31,12 @@ npxall lets anyone call any npm package function from the CLI, REST API, or AI a
 `npxall.com` (GitHub Pages) is up.
 
 The API and MCP servers were down from 2026-06-12, when the Coolify/Hetzner deployment
-was retired, until 2026-08-07. They now run on Google Cloud Run with scale-to-zero:
-
-- API: https://npxall-api-3eia2da3ha-ew.a.run.app
-- MCP: https://npxall-mcp-3eia2da3ha-ew.a.run.app
-
-`api.npxall.com` and `mcp.npxall.com` do **not** resolve to these yet. Mapping them
-needs `npxall.com` verified in Google Search Console, which is a manual browser step.
-Until then the custom hostnames stay parked.
+was retired, until 2026-08-07. They now run on Google Cloud Run with scale-to-zero, on
+`api.npxall.com` and `mcp.npxall.com`. The direct service URLs
+(`npxall-api-3eia2da3ha-ew.a.run.app`, `npxall-mcp-3eia2da3ha-ew.a.run.app`) remain
+valid and are the fallback while TLS finishes provisioning.
 
 ### In Progress
-- Verify `npxall.com` so the custom domains can be mapped to Cloud Run
 - Publish npxall 0.3.1 to npm
 
 ### Planned (Next)
