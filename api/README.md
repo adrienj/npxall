@@ -8,10 +8,14 @@ REST API and MCP server for calling any npm package function over HTTP.
 
 ## Services
 
-| Service | URL | Port | Protocol |
-|---------|-----|------|----------|
-| REST API | https://api.npxall.com | 3000 | HTTP/JSON |
-| MCP server | https://mcp.npxall.com | 3001 | MCP (Streamable HTTP + SSE) |
+| Service | URL | Protocol |
+|---------|-----|----------|
+| REST API | https://npxall-api-3eia2da3ha-ew.a.run.app | HTTP/JSON |
+| MCP server | https://npxall-mcp-3eia2da3ha-ew.a.run.app | MCP (Streamable HTTP + SSE) |
+
+The `api.npxall.com` and `mcp.npxall.com` hostnames are not live. They are parked
+pending Google domain verification, so use the URLs above. Examples below still show
+the custom hostnames as the intended endpoints; substitute until the mapping lands.
 
 ---
 
@@ -196,21 +200,32 @@ Services:
 - API: http://localhost:3000
 - MCP: http://localhost:3001
 
-### Coolify
+### Google Cloud Run (production)
 
-Both services are deployed via Coolify on a single server with Traefik routing:
+Both services run on Cloud Run in `europe-west1`, project `npxall-prod`, scaling to
+zero when idle. The Coolify/Hetzner deployment they replaced was retired 2026-06-12.
 
-- `api.npxall.com` → container port 3000
-- `mcp.npxall.com` → container port 3001
+| Setting | Value | Why |
+|---------|-------|-----|
+| `--min-instances` | `0` | Nothing is billed while idle |
+| `--max-instances` | `2` | Caps the blast radius of an unauthenticated execution endpoint |
+| `--concurrency` | `4` | Matches `SANDBOX_MAX_CONCURRENCY`; the default of 80 would queue requests into 4 isolate slots |
+| `--memory` | `2Gi` | Cloud Run's filesystem is in-memory, so the package cache counts against this |
+| `--timeout` | `120` | Covers a 60s install plus a 5s execution |
 
-Domains are set via `docker_compose_domains` in the Coolify app config.
+Because instances scale to zero and the cache lives in memory, a cold start pays both
+container boot and a fresh `npm install` for the requested package.
 
-### Environment variables (Coolify UI)
+### Environment variables
 
-| Variable | Value | Description |
-|----------|-------|-------------|
-| `CACHE_MAX_MB` | `500` | Cache size limit per service |
-| `PORT` | `3000` / `3001` | Service port |
+| Variable | Production value | Description |
+|----------|------------------|-------------|
+| `NPXALL_CACHE_DIR` | `/tmp/cache` | Only writable path on Cloud Run |
+| `CACHE_MAX_MB` | `512` | Cache size limit per service |
+| `SANDBOX_MAX_CONCURRENCY` | `4` | Simultaneous V8 isolates |
+| `SANDBOX_MEMORY_LIMIT_MB` | `64` (default) | Per-isolate heap |
+| `EXEC_TIMEOUT_MS` | `5000` (default) | CPU limit per execution |
+| `PORT` | injected by Cloud Run | Service port |
 
 ---
 
